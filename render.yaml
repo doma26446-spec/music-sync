@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: music-sync
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: WEBAPP_URL
+        value: https://music-sync.onrender.com
+      - key: BOT_TOKEN
+        sync: false

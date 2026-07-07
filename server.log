@@ -1,0 +1,7 @@
+INFO:     91.92.33.145:0 - "GET /?room=TEST HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49444 - "GET /?room=TEST HTTP/1.1" 200 OK
+INFO:     149.154.161.216:0 - "GET / HTTP/1.1" 200 OK
+INFO:     91.92.33.76:0 - "GET / HTTP/1.1" 200 OK
+INFO:     91.92.33.76:0 - "GET /style.css HTTP/1.1" 200 OK
+INFO:     94.26.90.171:0 - "GET /app.js HTTP/1.1" 200 OK
+INFO:     94.26.90.171:0 - "GET /favicon.ico HTTP/1.1" 404 Not Found
