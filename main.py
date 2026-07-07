@@ -121,13 +121,17 @@ async def ws_endpoint(websocket: WebSocket, room_code: str):
                 if room["playing"] and not room["paused"]:
                     room["paused"] = True
                     room["paused_position"] = time.time() - room["started_at"]
-                    await broadcast(room, {"action": "state", **state.public_state(room)})
+                    await broadcast(room, {"action": "pause", "position": room["paused_position"]})
 
             elif a == "resume":
                 if room["playing"] and room["paused"]:
                     room["paused"] = False
                     room["started_at"] = time.time() - room["paused_position"]
-                    await broadcast(room, {"action": "state", **state.public_state(room)})
+                    await broadcast(room, {
+                        "action": "play",
+                        "track": room["playing"],
+                        "startedAt": room["started_at"],
+                    })
 
             elif a == "seek":
                 pos = max(0.0, float(data.get("position", 0)))
@@ -135,7 +139,11 @@ async def ws_endpoint(websocket: WebSocket, room_code: str):
                     room["started_at"] = time.time() - pos
                     if room["paused"]:
                         room["paused_position"] = pos
-                    await broadcast(room, {"action": "state", **state.public_state(room)})
+                    await broadcast(room, {
+                        "action": "play",
+                        "track": room["playing"],
+                        "startedAt": room["started_at"],
+                    })
 
             elif a == "track_ended":
                 room["playing"] = None
