@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -266,16 +266,33 @@ async def on_audio(message: Message):
         await message.answer("Это не аудиофайл.")
         return
 
+    file_info = await bot.get_file(file_id)
     safe = "".join(c for c in name if c.isalnum() or c in "._-")
     path = TRACKS_DIR / f"{uuid.uuid4().hex[:8]}_{safe}"
-    await bot.download_file((await bot.get_file(file_id)).file_path, path)
+    await bot.download_file(file_info.file_path, path)
 
-    track = {"id": uuid.uuid4().hex[:8], "name": safe, "url": f"/tracks/{path.name}"}
+    track_id = uuid.uuid4().hex[:8]
+    track = {"id": track_id, "name": safe, "url": f"/api/stream/{code}/{track_id}"}
     state.add_track(room, track)
+    if "tg_paths" not in room:
+        room["tg_paths"] = {}
+    room["tg_paths"][track_id] = file_info.file_path
     await message.answer(f"✅ Добавлено (всего треков: {len(room['tracks'])})")
     if not room["paused"]:
         await start_playback(room)
     await broadcast(room, {"action": "state", **state.public_state(room)})
+
+
+@app.get("/api/stream/{room_code}/{track_id}")
+async def stream_track(room_code: str, track_id: str):
+    room = state.get_room(room_code)
+    if not room:
+        return JSONResponse({"error": "room not found"}, 404)
+    tg_path = room.get("tg_paths", {}).get(track_id)
+    if tg_path:
+        url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN}/{tg_path}"
+        return RedirectResponse(url)
+    return RedirectResponse("/tracks/demo.wav")
 
 
 app.mount("/", StaticFiles(directory=BASE_DIR / "static", html=True), name="static")
