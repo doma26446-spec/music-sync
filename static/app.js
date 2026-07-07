@@ -9,137 +9,112 @@ const audio = new Audio();
 audio.preload = "auto";
 
 let state = { tracks: [], playing: null, queue: [], started_at: 0, paused: false, paused_position: 0 };
-let localPos = 0, syncTimer = null, localTrigger = false;
+let localPos = 0;
+let timer = null;
 
-const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/${roomCode}`);
+// --- WebSocket ---
+const ws = new WebSocket( `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/${roomCode}` );
+let lastState = 0;
 
 ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
+  lastState = Date.now();
 
-  if (msg.action === "state") {
-    state = { ...state, ...msg };
-    renderPlaylist();
-    updatePlayBtn();
-  } else if (msg.action === "play") {
-    const isSame = state.playing?.id === msg.track.id;
+  // полное состояние — авторитетно, всегда применяем
+  if (msg.action === "state" || msg.action === "fullstate") {
+    applyState(msg);
+    return;
+  }
+
+  if (msg.action === "play") {
     state.playing = msg.track;
     state.started_at = msg.startedAt;
     state.paused = false;
+    schedulePlay(msg.track, msg.startedAt);
+    renderAll();
+    return;
+  }
 
-    if (isSame && localTrigger) {
-      // Мы сами запросили трек — он уже загружен, подгоняем позицию
-      localTrigger = false;
-      const target = Date.now() / 1000 - msg.startedAt;
-      if (target > 0 && (!audio.duration || target < audio.duration)) audio.currentTime = Math.max(0, target);
-      audio.play().catch(() => {});
-    } else if (!isSame) {
-      // Другой трек — загружаем и стартуем по серверу
-      schedulePlay(msg.track, msg.startedAt);
-    } else {
-      // Тот же трек (seek/resume от другого) — подгоняем
-      const target = Date.now() / 1000 - msg.startedAt;
-      if (target > 0 && (!audio.duration || target < audio.duration)) audio.currentTime = Math.max(0, target);
-      audio.play().catch(() => {});
-    }
-    renderPlaylist();
-    updatePlayBtn();
-  } else if (msg.action === "pause") {
+  if (msg.action === "pause") {
     state.paused = true;
     state.paused_position = msg.position;
     audio.pause();
-    updatePlayBtn();
+    updateUI();
     $("status").textContent = "пауза";
   }
 };
 
+function applyState(msg) {
+  const prevTrackId = state.playing?.id;
+  const prevStartedAt = state.started_at;
+  state = { ...state, ...msg };
+  if (msg.playing && msg.playing.id !== prevTrackId) {
+    schedulePlay(msg.playing, msg.started_at);
+  } else if (!msg.playing) {
+    audio.pause(); $("now").textContent = "—"; $("status").textContent = "ожидание…";
+  } else if (msg.paused !== audio.paused) {
+    if (msg.paused) audio.pause(); else audio.play().catch(() => {});
+  }
+  if (msg.playing && msg.playing.id === prevTrackId && msg.started_at !== prevStartedAt) {
+    const target = Date.now() / 1000 - msg.started_at;
+    if (target > 0 && (!audio.duration || target < audio.duration)) audio.currentTime = Math.max(0, target);
+  }
+  renderAll();
+}
+
 function send(a) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(a)); }
 
-// --- Audio ---
-let playTimer;
+// запрос состояния, если долго нет ответа
+setInterval(() => {
+  if (Date.now() - lastState > 4000) send({ action: "state" });
+}, 3000);
 
+// --- Playback ---
 function schedulePlay(track, startedAt) {
   if (!track) return;
-  stopSync();
-  clearTimeout(playTimer);
+  clearTimeout(timer);
   audio.src = track.url;
   audio.load();
-  const now = Date.now() / 1000;
-  const delay = (startedAt - now) * 1000;
-  if (delay > 80) {
-    $("status").textContent = delay.toFixed(0) + " мс…";
-    playTimer = setTimeout(() => { audio.currentTime = 0; audio.play().catch(() => {}); startSync(); }, delay);
-  } else {
-    audio.currentTime = Math.max(0, now - startedAt);
-    audio.play().catch(() => {});
-    startSync();
-  }
   $("now").textContent = track.name;
-  $("status").textContent = "играет";
-  updatePlayBtn();
-}
+  $("status").textContent = "загружаю…";
 
-function startSync() {
-  stopSync();
-  syncTimer = setInterval(() => {
-    if (state.paused) localPos = state.paused_position;
-    else if (state.playing) localPos = Date.now() / 1000 - state.started_at;
-    if (localPos < 0) localPos = 0;
-    updateSeek();
-  }, 80);
-}
+  const doStart = () => {
+    const now = Date.now() / 1000;
+    const delay = (startedAt - now) * 1000;
+    if (delay > 80) {
+      $("status").textContent = delay.toFixed(0) + " мс…";
+      timer = setTimeout(() => { audio.currentTime = 0; audio.play().catch(() => {}); $("status").textContent = "играет"; }, delay);
+    } else {
+      audio.currentTime = Math.max(0, now - startedAt);
+      audio.play().catch(() => {});
+      $("status").textContent = "играет";
+    }
+    updateUI();
+  };
 
-function stopSync() { clearInterval(syncTimer); }
-function updatePlayBtn() { $("playbtn").textContent = (state.playing && !state.paused && !audio.paused) ? "⏸" : "▶"; }
+  if (audio.readyState >= 3) doStart();
+  else audio.oncanplaythrough = doStart;
+}
 
 audio.onended = () => {
-  stopSync();
-  state.playing = null;
   $("status").textContent = "закончен";
   send({ action: "track_ended" });
 };
 
-// --- Pause/Resume ---
-$("playbtn").onclick = () => {
-  if (!state.playing) return;
-  if (state.paused) {
-    state.paused = false;
-    const pos = state.paused_position || 0;
-    state.started_at = Date.now() / 1000 - pos;
-    audio.currentTime = pos;
-    audio.play().catch(() => {});
-    startSync();
-    send({ action: "resume" });
-    $("status").textContent = "играет";
-  } else {
-    state.paused = true;
-    state.paused_position = Date.now() / 1000 - state.started_at;
-    audio.pause();
-    stopSync();
-    send({ action: "pause" });
-    $("status").textContent = "пауза";
-  }
-  updatePlayBtn();
-};
+audio.onerror = () => { $("status").textContent = "ошибка трека"; };
 
-// --- Seek ---
+// --- Seek slider ---
 const seek = $("seek");
 let seeking = false;
 
-seek.addEventListener("input", () => {
-  seeking = true;
-  localPos = parseFloat(seek.value);
-  $("current").textContent = fmtTime(localPos);
-});
-
-seek.addEventListener("change", () => {
-  const pos = parseFloat(seek.value);
-  seeking = false;
-  audio.currentTime = pos;
-  send({ action: "seek", position: pos });
-});
+seek.addEventListener("input", () => { seeking = true; localPos = parseFloat(seek.value); $("current").textContent = fmtTime(localPos); });
+seek.addEventListener("change", () => { seeking = false; audio.currentTime = parseFloat(seek.value); send({ action: "seek", position: parseFloat(seek.value) }); });
 
 function updateSeek() {
   if (seeking) return;
+  if (state.paused) localPos = state.paused_position;
+  else if (state.playing) localPos = Date.now() / 1000 - state.started_at;
+  if (localPos < 0) localPos = 0;
   const dur = audio.duration || 300;
   seek.max = dur;
   seek.value = Math.min(localPos, dur);
@@ -147,13 +122,24 @@ function updateSeek() {
   $("duration").textContent = fmtTime(dur);
 }
 
-function fmtTime(s) {
-  if (!s || s < 0) return "0:00";
-  return Math.floor(s / 60) + ":" + ("0" + Math.floor(s % 60)).slice(-2);
+function fmtTime(s) { if (!s || s < 0) return "0:00"; return Math.floor(s / 60) + ":" + ("0" + Math.floor(s % 60)).slice(-2); }
+
+setInterval(updateSeek, 100);
+
+// --- Кнопки ---
+function updateUI() {
+  $("playbtn").textContent = (state.playing && !state.paused && !audio.paused) ? "⏸" : "▶";
 }
 
-// --- Playlist ---
-function renderPlaylist() {
+$("playbtn").onclick = () => {
+  if (!state.playing) return;
+  if (state.paused) send({ action: "resume" });
+  else send({ action: "pause" });
+};
+
+// --- Плейлист ---
+function renderAll() {
+  updateUI();
   const ul = $("plist");
   ul.innerHTML = "";
   $("trackcount").textContent = state.tracks.length;
@@ -164,21 +150,11 @@ function renderPlaylist() {
     name.textContent = t.name;
     name.className = "tr-name";
     const btn = document.createElement("button");
-    btn.textContent = "▶";
-    btn.className = "tr-play";
+    btn.textContent = "▶"; btn.className = "tr-play";
     btn.onclick = () => {
       if (t.id === state.playing?.id) { $("playbtn").click(); return; }
-      // Загружаем трек сразу (для отзывчивости), ждём сервер для точного старта
-      localTrigger = true;
-      audio.src = t.url;
-      audio.load();
       $("status").textContent = "загружаю…";
-      state.playing = t;
-      state.paused = false;
-      state.paused_position = 0;
-      state.started_at = 0;
       send({ action: "play_track", trackId: t.id });
-      renderPlaylist();
     };
     li.appendChild(name);
     li.appendChild(btn);
