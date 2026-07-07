@@ -36,7 +36,7 @@ async def play_specific(room, track):
     room["playing"] = track
     room["paused"] = False
     room["paused_position"] = 0.0
-    room["started_at"] = time.time() + 1.0
+    room["started_at"] = time.time() + 3.0
     room["queue"] = [t for t in room["queue"] if t["id"] != track["id"]]
     await broadcast(room, {
         "action": "play",
@@ -52,6 +52,14 @@ async def start_playback(room):
     await play_specific(room, track)
 
 
+async def heartbeat():
+    while True:
+        await asyncio.sleep(2)
+        for code, room in list(state.rooms.items()):
+            if room["clients"]:
+                await broadcast(room, {"action": "state", **state.public_state(room)})
+
+
 # ---------- FastAPI ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -65,6 +73,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"menu button setup failed: {e}")
     asyncio.create_task(dp.start_polling(bot))
+    asyncio.create_task(heartbeat())
     yield
 
 
@@ -112,17 +121,13 @@ async def ws_endpoint(websocket: WebSocket, room_code: str):
                 if room["playing"] and not room["paused"]:
                     room["paused"] = True
                     room["paused_position"] = time.time() - room["started_at"]
-                    await broadcast(room, {"action": "pause", "position": room["paused_position"]})
+                    await broadcast(room, {"action": "state", **state.public_state(room)})
 
             elif a == "resume":
                 if room["playing"] and room["paused"]:
                     room["paused"] = False
                     room["started_at"] = time.time() - room["paused_position"]
-                    await broadcast(room, {
-                        "action": "play",
-                        "track": room["playing"],
-                        "startedAt": room["started_at"],
-                    })
+                    await broadcast(room, {"action": "state", **state.public_state(room)})
 
             elif a == "seek":
                 pos = max(0.0, float(data.get("position", 0)))
@@ -130,11 +135,7 @@ async def ws_endpoint(websocket: WebSocket, room_code: str):
                     room["started_at"] = time.time() - pos
                     if room["paused"]:
                         room["paused_position"] = pos
-                    await broadcast(room, {
-                        "action": "play",
-                        "track": room["playing"],
-                        "startedAt": room["started_at"],
-                    })
+                    await broadcast(room, {"action": "state", **state.public_state(room)})
 
             elif a == "track_ended":
                 room["playing"] = None
