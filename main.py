@@ -1,3 +1,4 @@
+import os
 import asyncio
 import time
 import uuid
@@ -6,7 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -23,7 +24,6 @@ TRACKS_DIR = BASE_DIR / "static" / "tracks"
 TRACKS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ---------- helpers ----------
 async def broadcast(room, msg):
     for c in list(room["clients"]):
         try:
@@ -52,15 +52,6 @@ async def start_playback(room):
     await play_specific(room, track)
 
 
-async def heartbeat():
-    while True:
-        await asyncio.sleep(2)
-        for code, room in list(state.rooms.items()):
-            if room["clients"]:
-                await broadcast(room, {"action": "state", **state.public_state(room)})
-
-
-# ---------- FastAPI ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -73,7 +64,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"menu button setup failed: {e}")
     asyncio.create_task(dp.start_polling(bot))
-    asyncio.create_task(heartbeat())
     yield
 
 
@@ -85,7 +75,6 @@ dp = Dispatcher()
 user_room = {}
 
 
-# ---------- WebSocket ----------
 @app.websocket("/ws/{room_code}")
 async def ws_endpoint(websocket: WebSocket, room_code: str):
     room = state.get_room(room_code)
@@ -157,7 +146,6 @@ async def ws_endpoint(websocket: WebSocket, room_code: str):
         room["clients"].discard(websocket)
 
 
-# ---------- REST ----------
 @app.get("/api/room/{room_code}")
 async def api_room(room_code: str):
     room = state.get_room(room_code)
@@ -171,14 +159,13 @@ async def api_demo(room_code: str):
     room = state.get_room(room_code)
     if not room:
         room = state.create_room()
-    track = {"id": "demo", "name": "demo.wav", "url": "/tracks/demo.wav"}
+    track = {"id": "demo", "name": "demo.wav", "url": f"/api/stream/{room_code}/demo"}
     state.add_track(room, track)
     await start_playback(room)
     await broadcast(room, {"action": "state", **state.public_state(room)})
     return {"ok": True}
 
 
-# ---------- Bot ----------
 def open_button(code: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🎵 Открыть плеер", web_app=WebAppInfo(url=f"{config.WEBAPP_URL}?room={code}"))
@@ -268,15 +255,11 @@ async def on_audio(message: Message):
 
     file_info = await bot.get_file(file_id)
     safe = "".join(c for c in name if c.isalnum() or c in "._-")
-    path = TRACKS_DIR / f"{uuid.uuid4().hex[:8]}_{safe}"
-    await bot.download_file(file_info.file_path, path)
 
     track_id = uuid.uuid4().hex[:8]
-    track = {"id": track_id, "name": safe, "url": f"/api/stream/{code}/{track_id}"}
+    tg_url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN}/{file_info.file_path}"
+    track = {"id": track_id, "name": safe, "url": tg_url}
     state.add_track(room, track)
-    if "tg_paths" not in room:
-        room["tg_paths"] = {}
-    room["tg_paths"][track_id] = file_info.file_path
     await message.answer(f"✅ Добавлено (всего треков: {len(room['tracks'])})")
     if not room["paused"]:
         await start_playback(room)
@@ -285,14 +268,10 @@ async def on_audio(message: Message):
 
 @app.get("/api/stream/{room_code}/{track_id}")
 async def stream_track(room_code: str, track_id: str):
-    room = state.get_room(room_code)
-    if not room:
-        return JSONResponse({"error": "room not found"}, 404)
-    tg_path = room.get("tg_paths", {}).get(track_id)
-    if tg_path:
-        url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN}/{tg_path}"
-        return RedirectResponse(url)
-    return RedirectResponse("/tracks/demo.wav")
+    demo_path = TRACKS_DIR / "demo.wav"
+    if demo_path.exists():
+        return FileResponse(demo_path, media_type="audio/wav")
+    return JSONResponse({"error": "track not found"}, 404)
 
 
 app.mount("/", StaticFiles(directory=BASE_DIR / "static", html=True), name="static")
