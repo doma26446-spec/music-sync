@@ -48,6 +48,7 @@ ws.onmessage = (e) => {
 function send(a) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(a)); }
 setInterval(() => { if (Date.now() - lastState > 4000) send({ action: "state" }); }, 3000);
 
+// --- Playback with preload ---
 let blobUrl = null;
 
 async function schedulePlay(track, startedAt) {
@@ -90,6 +91,7 @@ async function schedulePlay(track, startedAt) {
 audio.onended = () => { $("status").textContent = "закончен"; send({ action: "track_ended" }); };
 audio.onerror = () => { $("status").textContent = "ошибка трека"; };
 
+// --- Seek slider ---
 const seek = $("seek");
 let seeking = false;
 
@@ -116,6 +118,7 @@ setInterval(() => {
 
 function fmtTime(s) { if (!s || s < 0) return "0:00"; return Math.floor(s / 60) + ":" + ("0" + Math.floor(s % 60)).slice(-2); }
 
+// --- Кнопки + Плейлист ---
 function renderAll() {
   $("playbtn").textContent = (state.playing && !state.paused && !audio.paused) ? "⏸" : "▶";
   const ul = $("plist");
