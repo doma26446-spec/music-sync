@@ -262,11 +262,10 @@ async def on_audio(message: Message):
 
     file_info = await bot.get_file(file_id)
     safe = "".join(c for c in name if c.isalnum() or c in "._-")
-    path = TRACKS_DIR / f"{uuid.uuid4().hex[:8]}_{safe}"
-    await bot.download_file(file_info.file_path, path)
 
     track_id = uuid.uuid4().hex[:8]
-    track = {"id": track_id, "name": safe, "url": f"/tracks/{path.name}"}
+    url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN}/{file_info.file_path}"
+    track = {"id": track_id, "name": safe, "url": url}
     state.add_track(room, track)
     await message.answer(f"✅ Добавлено (всего треков: {len(room['tracks'])})")
     if not room["paused"]:
