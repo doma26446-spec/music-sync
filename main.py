@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from aiogram import Bot, Dispatcher, F
@@ -25,6 +25,7 @@ TRACKS_DIR = BASE_DIR / "static" / "tracks"
 TRACKS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# ---------- helpers ----------
 async def broadcast(room, msg):
     for c in list(room["clients"]):
         try:
@@ -53,6 +54,7 @@ async def start_playback(room):
     await play_specific(room, track)
 
 
+# ---------- FastAPI ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -77,6 +79,7 @@ dp = Dispatcher()
 user_room = {}
 
 
+# ---------- WebSocket ----------
 @app.websocket("/ws/{room_code}")
 async def ws_endpoint(websocket: WebSocket, room_code: str):
     room = state.get_room(room_code)
@@ -148,6 +151,7 @@ async def ws_endpoint(websocket: WebSocket, room_code: str):
         room["clients"].discard(websocket)
 
 
+# ---------- REST ----------
 @app.get("/api/room/{room_code}")
 async def api_room(room_code: str):
     room = state.get_room(room_code)
@@ -168,6 +172,7 @@ async def api_demo(room_code: str):
     return {"ok": True}
 
 
+# ---------- Bot ----------
 def open_button(code: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🎵 Открыть плеер", web_app=WebAppInfo(url=f"{config.WEBAPP_URL}?room={code}"))
@@ -257,13 +262,12 @@ async def on_audio(message: Message):
 
     file_info = await bot.get_file(file_id)
     safe = "".join(c for c in name if c.isalnum() or c in "._-")
+    path = TRACKS_DIR / f"{uuid.uuid4().hex[:8]}_{safe}"
+    await bot.download_file(file_info.file_path, path)
 
     track_id = uuid.uuid4().hex[:8]
-    track = {"id": track_id, "name": safe, "url": f"/api/stream/{code}/{track_id}"}
+    track = {"id": track_id, "name": safe, "url": f"/tracks/{path.name}"}
     state.add_track(room, track)
-    if "tg_paths" not in room:
-        room["tg_paths"] = {}
-    room["tg_paths"][track_id] = file_info.file_path
     await message.answer(f"✅ Добавлено (всего треков: {len(room['tracks'])})")
     if not room["paused"]:
         await start_playback(room)
@@ -272,12 +276,6 @@ async def on_audio(message: Message):
 
 @app.get("/api/stream/{room_code}/{track_id}")
 async def stream_track(room_code: str, track_id: str):
-    room = state.get_room(room_code)
-    if room:
-        tg_path = room.get("tg_paths", {}).get(track_id)
-        if tg_path:
-            url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN}/{tg_path}"
-            return RedirectResponse(url)
     demo_path = TRACKS_DIR / "demo.wav"
     if demo_path.exists():
         return FileResponse(demo_path, media_type="audio/wav")
