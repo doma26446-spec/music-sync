@@ -48,27 +48,13 @@ ws.onmessage = (e) => {
 function send(a) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(a)); }
 setInterval(() => { if (Date.now() - lastState > 4000) send({ action: "state" }); }, 3000);
 
-// --- Playback with preload ---
-let blobUrl = null;
-
-async function schedulePlay(track, startedAt) {
+function schedulePlay(track, startedAt) {
   if (!track) return;
   clearTimeout(timer);
+  audio.src = track.url;
+  audio.load();
   $("now").textContent = track.name;
   $("status").textContent = "загружаю…";
-
-  if (blobUrl) { URL.revokeObjectURL(blobUrl); blobUrl = null; }
-
-  try {
-    const resp = await fetch(track.url);
-    const blob = await resp.blob();
-    blobUrl = URL.createObjectURL(blob);
-    audio.src = blobUrl;
-  } catch {
-    audio.src = track.url;
-  }
-
-  audio.load();
 
   const play = () => {
     const now = Date.now() / 1000;
@@ -91,7 +77,6 @@ async function schedulePlay(track, startedAt) {
 audio.onended = () => { $("status").textContent = "закончен"; send({ action: "track_ended" }); };
 audio.onerror = () => { $("status").textContent = "ошибка трека"; };
 
-// --- Seek slider ---
 const seek = $("seek");
 let seeking = false;
 
@@ -118,7 +103,6 @@ setInterval(() => {
 
 function fmtTime(s) { if (!s || s < 0) return "0:00"; return Math.floor(s / 60) + ":" + ("0" + Math.floor(s % 60)).slice(-2); }
 
-// --- Кнопки + Плейлист ---
 function renderAll() {
   $("playbtn").textContent = (state.playing && !state.paused && !audio.paused) ? "⏸" : "▶";
   const ul = $("plist");
