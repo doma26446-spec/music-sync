@@ -7,7 +7,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -68,6 +69,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MUSIC sync bot", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/tracks", StaticFiles(directory=TRACKS_DIR), name="tracks")
 
 bot = Bot(token=config.BOT_TOKEN)
@@ -181,7 +183,7 @@ async def cmd_start(message: Message):
         "/open — открыть плеер\n"
         "/queue — что в очереди\n\n"
         "После входа пришли мне аудио — оно встанет в плейлист и "
-        "заиграет одновременно у всех участников. \n1"
+        "заиграет одновременно у всех участников.\n1"
     )
 
 
@@ -257,9 +259,11 @@ async def on_audio(message: Message):
     safe = "".join(c for c in name if c.isalnum() or c in "._-")
 
     track_id = uuid.uuid4().hex[:8]
-    tg_url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN}/{file_info.file_path}"
-    track = {"id": track_id, "name": safe, "url": tg_url}
+    track = {"id": track_id, "name": safe, "url": f"/api/stream/{code}/{track_id}"}
     state.add_track(room, track)
+    if "tg_paths" not in room:
+        room["tg_paths"] = {}
+    room["tg_paths"][track_id] = file_info.file_path
     await message.answer(f"✅ Добавлено (всего треков: {len(room['tracks'])})")
     if not room["paused"]:
         await start_playback(room)
@@ -268,6 +272,12 @@ async def on_audio(message: Message):
 
 @app.get("/api/stream/{room_code}/{track_id}")
 async def stream_track(room_code: str, track_id: str):
+    room = state.get_room(room_code)
+    if room:
+        tg_path = room.get("tg_paths", {}).get(track_id)
+        if tg_path:
+            url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN}/{tg_path}"
+            return RedirectResponse(url)
     demo_path = TRACKS_DIR / "demo.wav"
     if demo_path.exists():
         return FileResponse(demo_path, media_type="audio/wav")
